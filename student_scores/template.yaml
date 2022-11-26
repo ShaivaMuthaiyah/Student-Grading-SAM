@@ -1,0 +1,77 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  This simple serverless application takes a dictionary of student details and scores, grades them based on the score and returns the values. 
+  Have integradted 3 lambda functions, 1 s3 bucket and 2 SNS topics.
+
+Globals:
+  Function:
+    Timeout: 20
+
+Resources:
+
+  StudentScoreTopic:
+    Type: AWS::SNS::Topic
+
+  ErrorMessageTopic:
+    Type: AWS::SNS::Topic
+
+  StudentScoreBucket:
+    Type: AWS::S3::Bucket    #Upload files into this bucket as a json dictionary like the sample text provided "sampledata"
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-${AWS::AccountId}-${AWS::Region}
+
+  StudentGradingFunction:
+    Type: AWS::Serverless::Function    #Function takes in the dictionary and looks at the score and grades it
+    Properties:
+      CodeUri: student_scores/
+      Handler: student_grade.lambda_handler
+      Runtime: python3.9
+      DeadLetterQueue:
+        Type: SNS
+        TargetArn: !Ref ErrorMessageTopic
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Sub ${AWS::StackName}-${AWS::AccountId}-${AWS::Region}   #Permissions to access SNS and read S3 Bucket
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt StudentScoreTopic.TopicName
+
+      Environment:
+        Variables:
+          STUDENT_SCORE_TOPIC: !Ref StudentScoreTopic
+
+      Events:             #Event triggered by uploading a file into the bucket
+        S3Event:
+          Type: S3
+          Properties:
+            Bucket: !Ref StudentScoreBucket
+            Events: s3:ObjectCreated:*
+
+  ReturnGradesFunction:    #Returns the graded student dictionary into Cloud Watch Logs
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: student_scores/
+      Handler: grade_return.lambda_handler
+      Runtime: python3.9
+      Events:
+        SNSEvent:
+          Type: SNS
+          Properties:
+            Topic: !Ref StudentScoreTopic
+
+
+  ErrorHandlingFunction:
+    Type: AWS::Serverless::Function #Handles errors from the function
+    Properties:
+      CodeUri: student_scores/
+      Handler: error.lambda_handler
+      Runtime: python3.9
+      Events:
+        SNSEvent:
+          Type: SNS
+          Properties:
+            Topic: !Ref ErrorMessageTopic
+
+
+
+
